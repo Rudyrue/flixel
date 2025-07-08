@@ -5,22 +5,19 @@ import openfl.display.Graphics;
 import openfl.display.Sprite;
 import openfl.display.DisplayObject;
 import openfl.events.KeyboardEvent;
-import openfl.events.MouseEvent;
-import openfl.geom.Point;
 import flixel.FlxObject;
+import openfl.events.MouseEvent;
 import flixel.group.FlxGroup.FlxTypedGroup;
 import flixel.input.FlxPointer;
 import flixel.math.FlxPoint;
 import flixel.math.FlxRect;
+import flixel.system.debug.FlxDebugger.GraphicInteractive;
 import flixel.system.debug.Window;
 import flixel.system.debug.interaction.tools.Transform;
 import flixel.system.debug.interaction.tools.Eraser;
-import flixel.system.debug.interaction.tools.LogBitmap;
 import flixel.system.debug.interaction.tools.Mover;
 import flixel.system.debug.interaction.tools.Pointer;
 import flixel.system.debug.interaction.tools.Tool;
-import flixel.system.debug.interaction.tools.ToggleBounds;
-import flixel.system.debug.interaction.tools.TrackObject;
 import flixel.util.FlxDestroyUtil;
 import flixel.util.FlxSpriteUtil;
 #if !(FLX_NATIVE_CURSOR && FLX_MOUSE)
@@ -54,19 +51,7 @@ class Interaction extends Window
 	 * selection marks, for instance.
 	 */
 	public var shouldDrawItemsSelection:Bool = true;
-	
-	/**
-	 * Whether or not the user is using a mac keyboard, determines whether to use command or ctrl
-	 */
-	public final macKeyboard:Bool =
-		#if mac
-		true;
-		#elseif (js && html5)
-		untyped js.Syntax.code("/AppleWebKit/.test (navigator.userAgent) && /Mobile\\/\\w+/.test (navigator.userAgent) || /Mac/.test (navigator.platform)");
-		#else
-		false;
-		#end
-	
+
 	var _container:Sprite;
 	var _customCursor:Sprite;
 	var _tools:Array<Tool> = [];
@@ -80,13 +65,12 @@ class Interaction extends Window
 
 	public function new(container:Sprite)
 	{
-		super("Tools", Icon.interactive, 40, 25, false);
+		super("Tools", new GraphicInteractive(0, 0), 40, 25, false);
 		reposition(2, 100);
 		_container = container;
 
 		_customCursor = new Sprite();
 		_customCursor.mouseEnabled = false;
-		_customCursor.mouseChildren = false;
 		_container.addChild(_customCursor);
 
 		// Add all built-in tools
@@ -94,9 +78,6 @@ class Interaction extends Window
 		addTool(new Mover());
 		addTool(new Eraser());
 		addTool(new Transform());
-		addTool(new ToggleBounds());
-		addTool(new LogBitmap());
-		addTool(new TrackObject());
 
 		FlxG.signals.postDraw.add(postDraw);
 		FlxG.debugger.visibilityChanged.add(handleDebuggerVisibilityChanged);
@@ -118,49 +99,59 @@ class Interaction extends Window
 		else
 			restoreSystemCursor();
 	}
-	
+
 	function updateMouse(event:MouseEvent):Void
 	{
 		#if (neko || js) // openfl/openfl#1305
 		if (event.stageX == null || event.stageY == null)
 			return;
 		#end
-		
-		_customCursor.x = event.stageX;
-		_customCursor.y = event.stageY;
-		
+
+		var offsetX = 0.0;
+		var offsetY = 0.0;
+
+		// If the active tool has a custom cursor, we assume its
+		// "point of click" is the center of the cursor icon.
+		if (activeTool != null)
+		{
+			var cursorIcon = activeTool.cursor;
+			if (cursorIcon != null)
+			{
+				offsetX = cursorIcon.width / FlxG.scaleMode.scale.x / 2;
+				offsetY = cursorIcon.height / FlxG.scaleMode.scale.y / 2;
+			}
+		}
+
+		_customCursor.x = event.stageX + offsetX;
+		_customCursor.y = event.stageY + offsetY;
+
 		#if FLX_MOUSE
 		// Calculate in-game coordinates based on mouse position and camera.
-		_flixelPointer.setRawPositionUnsafe(Std.int(FlxG.game.mouseX), Std.int(FlxG.game.mouseY));
-		
+		_flixelPointer.setGlobalScreenPositionUnsafe(event.stageX, event.stageY);
+
 		// Store Flixel mouse coordinates to speed up all
 		// internal calculations (overlap, etc)
-		flixelPointer.x = _flixelPointer.x;
-		flixelPointer.y = _flixelPointer.y;
+		flixelPointer.x = _flixelPointer.x + offsetX;
+		flixelPointer.y = _flixelPointer.y + offsetY;
 		#end
 	}
-	
+
 	function handleMouseClick(event:MouseEvent):Void
 	{
 		// Did the user click a debugger UI element instead of performing
 		// a click related to a tool?
-		if (event.type == MouseEvent.MOUSE_DOWN && objectBelongsToDebugger(event.target))
+		if (event.type == MouseEvent.MOUSE_DOWN && belongsToDebugger(cast event.target))
 			return;
-		
+
 		pointerJustPressed = event.type == MouseEvent.MOUSE_DOWN;
 		pointerJustReleased = event.type == MouseEvent.MOUSE_UP;
-		
+
 		if (pointerJustPressed)
 			pointerPressed = true;
 		else if (pointerJustReleased)
 			pointerPressed = false;
 	}
 
-	function objectBelongsToDebugger(object:openfl.utils.Object):Bool
-	{
-		return object is DisplayObject && belongsToDebugger(cast object);
-	}
-	
 	function belongsToDebugger(object:DisplayObject):Bool
 	{
 		if (object == null)
@@ -394,11 +385,9 @@ class Interaction extends Window
 		{
 			if (member != null && member.scrollFactor != null && member.isOnScreen())
 			{
-				final margin = 0.5;
-				final scroll = FlxG.camera.scroll;
-				// Render a white rectangle centered at the selected item
-				gfx.lineStyle(1.0, 0xFFFFFF, 0.75);
-				gfx.drawRect(member.x - scroll.x - margin, member.y - scroll.y - margin, member.width + margin*2, member.height + margin*2);
+				// Render a red rectangle centered at the selected item
+				gfx.lineStyle(0.9, 0xff0000);
+				gfx.drawRect(member.x - FlxG.camera.scroll.x, member.y - FlxG.camera.scroll.y, member.width * 1.0, member.height * 1.0);
 			}
 		}
 
@@ -435,17 +424,15 @@ class Interaction extends Window
 		}
 	}
 
-	public function registerCustomCursor(name:String, icon:BitmapData, offsetX = 0.0, offsetY = 0.0):Void
+	public function registerCustomCursor(name:String, icon:BitmapData):Void
 	{
 		if (icon == null)
 			return;
 
 		#if (FLX_NATIVE_CURSOR && FLX_MOUSE)
-		FlxG.mouse.registerSimpleNativeCursorData(name, icon, new Point(-offsetX, -offsetY));
+		FlxG.mouse.registerSimpleNativeCursorData(name, icon);
 		#else
 		var sprite = new Sprite();
-		sprite.x = offsetX;
-		sprite.y = offsetY;
 		sprite.visible = false;
 		sprite.name = name;
 		sprite.addChild(new Bitmap(icon));
@@ -605,59 +592,11 @@ class Interaction extends Window
 		return FlxG.debugger.visible && visible && activeTool != null;
 	}
 
-	/**
-	 * Returns a list all items in the state and substate that are within the given area
-	 * 
-	 * @param   state  The state to search
-	 * @param   area   The rectangular area to search
-	 * @since 5.6.0
-	 */
-	public function getItemsWithinState(state:FlxState, area:FlxRect):Array<FlxObject>
+	public function findItemsWithinState(items:Array<FlxBasic>, state:FlxState, area:FlxRect):Void
 	{
-		final items = new Array<FlxObject>();
-		
-		addItemsWithinArea(items, state.members, area);
+		findItemsWithinArea(items, state.members, area);
 		if (state.subState != null)
-			addItemsWithinState(items, state.subState, area);
-		
-		return items;
-	}
-	
-	@:deprecated("findItemsWithinState is deprecated, use getItemsWithinState or addItemsWithinState")
-	public inline function findItemsWithinState(items:Array<FlxBasic>, state:FlxState, area:FlxRect):Void
-	{
-		addItemsWithinState(cast items, state, area);
-	}
-	
-	/**
-	 * finds all items in the state and substate that are within the given area and
-	 * adds them to the given list.
-	 * 
-	 * @param   items  The list to add the items
-	 * @param   state  The state to search
-	 * @param   area   The rectangular area to search
-	 * @since 5.6.0
-	 */
-	public function addItemsWithinState(items:Array<FlxObject>, state:FlxState, area:FlxRect):Void
-	{
-		addItemsWithinArea(items, state.members, area);
-		if (state.subState != null)
-			addItemsWithinState(items, state.subState, area);
-	}
-	
-	/**
-	 * Finds and returns top-most item in the state and substate within the given area
-	 * 
-	 * @param   state  The state to search
-	 * @param   area   The rectangular area to search
-	 * @since 5.6.0
-	 */
-	public function getTopItemWithinState(state:FlxState, area:FlxRect):FlxObject
-	{
-		if (state.subState != null)
-			return getTopItemWithinState(state.subState, area);
-		
-		return getTopItemWithinArea(state.members, area);
+			findItemsWithinState(items, state.subState, area);
 	}
 
 	/**
@@ -666,130 +605,27 @@ class Interaction extends Window
 	 * if an item is within the searching area or not by checking if the item's hitbox (obtained from
 	 * `getHitbox()`) overlaps the area parameter.
 	 *
-	 * @param   items    Array where the method will place all found items. Any previous content in the array will be preserved.
-	 * @param   members  Array where the method will recursively search for items.
-	 * @param   area     A rectangle that describes the area where the method should search within.
-	 */
-	@:deprecated("findItemsWithinArea is deprecated, use addItemsWithinArea")// since 5.6.0
-	public function findItemsWithinArea(items:Array<FlxBasic>, members:Array<FlxBasic>, area:FlxRect):Void
-	{
-		addItemsWithinArea(cast items, members, area);
-	}
-	
-	function isOverObject(object:FlxObject, area:FlxRect):Bool
-	{
-		return area.overlaps(object.getHitbox(FlxRect.weak()));
-	}
-	
-	function isOverSprite(sprite:FlxSprite, area:FlxRect):Bool
-	{
-		// Ignore sprites' alpha when clicking a point
-		return (area.width > 1 || area.height > 1)
-			? isOverObject(sprite, area)
-			: sprite.pixelsOverlapPoint(flixelPointer, 0x10);
-	}
-	
-	/**
-	 * Find all items within an area. In order to improve performance and reduce temporary allocations,
-	 * the method has no return, you must pass an array where items will be placed. The method decides
-	 * if an item is within the searching area or not by checking if the item's hitbox (obtained from
-	 * `getHitbox()`) overlaps the area parameter.
-	 *
-	 * @param   items    Array where the method will place all found items. Any previous content in the array will be preserved.
-	 * @param   members  Array where the method will recursively search for items.
-	 * @param   area     A rectangle that describes the area where the method should search within.
-	 * @since 5.6.0
-	 */
-	public function addItemsWithinArea(items:Array<FlxObject>, members:Array<FlxBasic>, area:FlxRect):Void
-	{
-		// we iterate backwards to get the sprites on top first
-		var i = members.length;
-		while (i-- > 0)
-		{
-			final member = members[i];
-			// Ignore invisible or non-existent entities
-			if (member == null || !member.visible || !member.exists)
-				continue;
-			
-			final group = FlxTypedGroup.resolveSelectionGroup(member);
-			if (group != null)
-			{
-				addItemsWithinArea(items, group.members, area);
-			}
-			else if (member is FlxSprite)
-			{
-				final sprite:FlxSprite = cast member;
-				if (isOverSprite(sprite, area))
-					items.push(sprite);
-			}
-			else if (member is FlxObject)
-			{
-				final object:FlxObject = cast member;
-				if (isOverObject(object, area))
-					items.push(object);
-			}
-		}
-	}
-	
-	/**
-	 * Searches the members for the top-most object inside the given rectangle
-	 * 
-	 * @param   members  The list of FlxObjects or FlxGroups
-	 * @param   area     The rectangular area to search
-	 * @return  The top-most item
-	 * @since 5.6.0
+	 * @param	items		array where the method will place all found items. Any previous content in the array will be preserved.
+	 * @param	members		array where the method will recursively search for items.
+	 * @param	area		a rectangle that describes the area where the method should search within.
 	 */
 	@:access(flixel.group.FlxTypedGroup)
-	public function getTopItemWithinArea(members:Array<FlxBasic>, area:FlxRect):FlxObject
+	public function findItemsWithinArea(items:Array<FlxBasic>, members:Array<FlxBasic>, area:FlxRect):Void
 	{
 		// we iterate backwards to get the sprites on top first
 		var i = members.length;
 		while (i-- > 0)
 		{
-			final member = members[i];
+			var member = members[i];
 			// Ignore invisible or non-existent entities
 			if (member == null || !member.visible || !member.exists)
 				continue;
-			
-			final group = FlxTypedGroup.resolveGroup(member);
+
+			var group = FlxTypedGroup.resolveGroup(member);
 			if (group != null)
-			{
-				final result = getTopItemWithinArea(group.members, area);
-				if (result != null)
-					return result;
-			}
-			
-			if (member is FlxSprite)
-			{
-				final sprite:FlxSprite = cast member;
-				if (isOverSprite(sprite, area))
-					return sprite;
-			}
-			else if (member is FlxObject)
-			{
-				final object:FlxObject = cast member;
-				if (isOverObject(object, area))
-					return object;
-			}
+				findItemsWithinArea(items, group.members, area);
+			else if ((member is FlxSprite) && area.overlaps(cast(member, FlxSprite).getHitbox()))
+				items.push(cast member);
 		}
-		return null;
-	}
-	
-	public function toDebugX(worldX:Float, camera:FlxCamera)
-	{
-		if (FlxG.renderTile)
-			return camera.canvas.localToGlobal(new Point(worldX, 0)).x;
-		else
-			@:privateAccess
-			return camera._flashBitmap.localToGlobal(new Point(worldX, 0)).x;
-	}
-	
-	public function toDebugY(worldY:Float, camera:FlxCamera)
-	{
-		if (FlxG.renderTile)
-			return camera.canvas.localToGlobal(new Point(0, worldY)).y;
-		else
-			@:privateAccess
-			return camera._flashBitmap.localToGlobal(new Point(0, worldY)).y;
 	}
 }
